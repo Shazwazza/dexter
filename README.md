@@ -35,7 +35,7 @@ Dexter takes complex financial questions and turns them into clear, step-by-step
 ## ✅ Prerequisites
 
 - [Bun](https://bun.com) runtime (v1.0 or higher)
-- OpenAI API key (get [here](https://platform.openai.com/api-keys))
+- OpenAI API key (get [here](https://platform.openai.com/api-keys)) **OR** GitHub Copilot subscription
 - Financial Datasets API key (get [here](https://financialdatasets.ai))
 - Exa API key (get [here](https://exa.ai)) - optional, for web search
 
@@ -82,6 +82,10 @@ cp env.example .env
 # GOOGLE_API_KEY=your-google-api-key (optional)
 # XAI_API_KEY=your-xai-api-key (optional)
 # OPENROUTER_API_KEY=your-openrouter-api-key (optional)
+
+# (Optional) If using GitHub Copilot - no API key needed, uses CLI authentication
+# Install Copilot CLI: https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli
+# Then run: copilot auth login
 
 # (Optional) If using Ollama locally
 # OLLAMA_BASE_URL=http://127.0.0.1:11434

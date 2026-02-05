@@ -148,6 +148,13 @@ export function useModelSelection(
       return;
     }
     
+    // For GitHub Copilot, skip API key flow (uses CLI authentication)
+    if (pendingProvider === 'copilot') {
+      const fullModelId = `copilot:${modelId}`;
+      completeModelSwitch(pendingProvider, fullModelId);
+      return;
+    }
+    
     // For cloud providers, check API key
     if (checkApiKeyExistsForProvider(pendingProvider)) {
       completeModelSwitch(pendingProvider, modelId);

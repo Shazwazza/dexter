@@ -16,6 +16,7 @@ const PROVIDERS: Record<string, ProviderConfig> = {
   google: { displayName: 'Google', apiKeyEnvVar: 'GOOGLE_API_KEY' },
   openrouter: { displayName: 'OpenRouter', apiKeyEnvVar: 'OPENROUTER_API_KEY' },
   ollama: { displayName: 'Ollama' },
+  copilot: { displayName: 'GitHub Copilot' }, // Uses CLI authentication, no API key
 };
 
 export function getApiKeyNameForProvider(providerId: string): string | undefined {

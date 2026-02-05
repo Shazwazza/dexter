@@ -8,6 +8,7 @@ import { StructuredToolInterface } from '@langchain/core/tools';
 import { Runnable } from '@langchain/core/runnables';
 import { z } from 'zod';
 import { DEFAULT_SYSTEM_PROMPT } from '@/agent/prompts';
+import { ChatCopilot } from './copilot.js';
 
 export const DEFAULT_PROVIDER = 'openai';
 export const DEFAULT_MODEL = 'gpt-5.2';
@@ -19,6 +20,7 @@ const FAST_MODELS: Record<string, string> = {
   google: 'gemini-3-flash-preview',
   xai: 'grok-4-1-fast-reasoning',
   openrouter: 'openrouter:openai/gpt-4o-mini',
+  copilot: 'copilot:gpt-4.1',
 };
 
 /**
@@ -58,6 +60,11 @@ function getApiKey(envVar: string, providerName: string): string {
 }
 
 const MODEL_PROVIDERS: Record<string, ModelFactory> = {
+  'copilot:': (name, opts) =>
+    new ChatCopilot({
+      model: name.replace(/^copilot:/, ''),
+      streaming: opts.streaming,
+    }),
   'claude-': (name, opts) =>
     new ChatAnthropic({
       model: name,
