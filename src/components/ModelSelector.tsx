@@ -39,6 +39,12 @@ const PROVIDER_MODELS: Record<string, Model[]> = {
     { id: 'deepseek-chat', displayName: 'DeepSeek V3' },
     { id: 'deepseek-reasoner', displayName: 'DeepSeek R1' },
   ],
+  copilot: [
+    { id: 'copilot:gpt-4.1', displayName: 'GPT 4.1' },
+    { id: 'copilot:gpt-5.2', displayName: 'GPT 5.2' },
+    { id: 'copilot:claude-sonnet-4-5', displayName: 'Claude Sonnet 4.5' },
+    { id: 'copilot:claude-opus-4-5', displayName: 'Claude Opus 4.5' },
+  ],
 };
 
 // Derive the provider list from the canonical registry, attaching local model lists

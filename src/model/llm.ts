@@ -18,7 +18,6 @@ import { resolveProvider, getProviderById } from '@/providers';
 export const DEFAULT_PROVIDER = 'openai';
 export const DEFAULT_MODEL = 'gpt-5.2';
 
-  copilot: 'copilot:gpt-4.1',
 /**
  * Gets the fast model variant for the given provider.
  * Falls back to the provided model if no fast variant is configured (e.g., Ollama).
@@ -115,6 +114,11 @@ const MODEL_FACTORIES: Record<string, ModelFactory> = {
       model: name.replace(/^ollama:/, ''),
       ...opts,
       ...(process.env.OLLAMA_BASE_URL ? { baseUrl: process.env.OLLAMA_BASE_URL } : {}),
+    }),
+  copilot: (name, opts) =>
+    new ChatCopilot({
+      model: name.replace(/^copilot:/, ''),
+      streaming: opts.streaming,
     }),
 };
 

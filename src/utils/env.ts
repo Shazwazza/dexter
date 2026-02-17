@@ -5,7 +5,6 @@ import { getProviderById } from '@/providers';
 // Load .env on module import
 config({ quiet: true });
 
-  copilot: { displayName: 'GitHub Copilot' }, // Uses CLI authentication, no API key
 export function getApiKeyNameForProvider(providerId: string): string | undefined {
   return getProviderById(providerId)?.apiKeyEnvVar;
 }
