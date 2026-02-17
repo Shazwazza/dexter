@@ -37,7 +37,7 @@ Dexter takes complex financial questions and turns them into clear, step-by-step
 
 - [Bun](https://bun.com) runtime (v1.0 or higher)
 - OpenAI API key (get [here](https://platform.openai.com/api-keys)) **OR** GitHub Copilot subscription
-- Financial Datasets API key (get [here](https://financialdatasets.ai))
+- Financial Datasets API key (get [here](https://financialdatasets.ai)) **OR** Alpha Vantage API key (get [here](https://www.alphavantage.co/support/#api-key))
 - Exa API key (get [here](https://exa.ai)) - optional, for web search
 
 #### Installing Bun
@@ -88,8 +88,16 @@ cp env.example .env
 # Install Copilot CLI: https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli
 # Then run: copilot auth login
 
+# Financial Data Provider (choose one)
+# FINANCIAL_DATA_PROVIDER=financialdatasets  # Default - higher rate limits, SEC filings support
+# FINANCIAL_DATA_PROVIDER=alphavantage       # Alternative - global coverage, forex, technical indicators
+
 # Institutional-grade market data for agents; AAPL, NVDA, MSFT are free
 # FINANCIAL_DATASETS_API_KEY=your-financial-datasets-api-key
+
+# Alpha Vantage API key (if using alphavantage provider)
+# ALPHAVANTAGE_API_KEY=your-alpha-vantage-api-key
+# Note: Free tier has 25 requests/day limit
 
 # (Optional) If using Ollama locally
 # OLLAMA_BASE_URL=http://127.0.0.1:11434
