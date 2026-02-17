@@ -115,11 +115,14 @@ const MODEL_FACTORIES: Record<string, ModelFactory> = {
       ...opts,
       ...(process.env.OLLAMA_BASE_URL ? { baseUrl: process.env.OLLAMA_BASE_URL } : {}),
     }),
-  copilot: (name, opts) =>
-    new ChatCopilot({
-      model: name.replace(/^copilot:/, ''),
+  copilot: (name, opts) => {
+    // Strip 'copilot:' prefix and normalize underscores to dots for model names
+    const modelName = name.replace(/^copilot:/, '').replace(/_/g, '.');
+    return new ChatCopilot({
+      model: modelName,
       streaming: opts.streaming,
-    }),
+    });
+  },
 };
 
 const DEFAULT_FACTORY: ModelFactory = (name, opts) =>

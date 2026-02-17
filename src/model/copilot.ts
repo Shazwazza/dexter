@@ -12,6 +12,24 @@ import { SimpleChatModel, type BaseChatModelParams } from '@langchain/core/langu
 import { AIMessage, BaseMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
 import type { ChatResult } from '@langchain/core/outputs';
+import { logger } from '../utils/logger.js';
+
+// Capture console errors from the Copilot SDK
+const originalConsoleError = console.error;
+console.error = (...args: unknown[]) => {
+  const message = args.map(arg => String(arg)).join(' ');
+  
+  // Check if this is a Copilot SDK error
+  if (message.includes('403') || message.includes('Forbidden') || message.includes('multipart request')) {
+    logger.error('[Copilot SDK] Console error captured', { message });
+    
+    // Also log to original console for visibility
+    originalConsoleError(...args);
+  } else {
+    // For non-Copilot errors, just use original console.error
+    originalConsoleError(...args);
+  }
+};
 
 /**
  * Options for ChatCopilot model initialization.
@@ -46,16 +64,53 @@ class CopilotClientManager {
 
   async getClient(): Promise<CopilotClient> {
     if (!this.client) {
-      this.client = new CopilotClient();
+      logger.info('[Copilot] Creating new CopilotClient instance');
+      try {
+        this.client = new CopilotClient();
+        logger.debug('[Copilot] CopilotClient constructor completed');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error('[Copilot] Failed to create CopilotClient', { error: message });
+        throw error;
+      }
     }
 
     // Ensure the client is started
     if (!this.startPromise) {
-      this.startPromise = this.client.start();
+      logger.info('[Copilot] Starting CopilotClient...');
+      logger.debug('[Copilot] About to call client.start() - this may make network requests to GitHub');
+      
+      this.startPromise = (async () => {
+        try {
+          logger.debug('[Copilot] Executing client.start()...');
+          
+          // Add timeout to the actual start call
+          const startCall = this.client!.start();
+          const timeoutMs = 30000; // 30 seconds
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            setTimeout(() => {
+              logger.error('[Copilot] client.start() timed out');
+              reject(new Error(`CopilotClient.start() timed out after ${timeoutMs / 1000}s`));
+            }, timeoutMs);
+          });
+          
+          await Promise.race([startCall, timeoutPromise]);
+          logger.debug('[Copilot] client.start() returned successfully');
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const stack = error instanceof Error ? error.stack : undefined;
+          logger.error('[Copilot] client.start() threw error', { error: message, stack });
+          throw error;
+        }
+      })();
     }
+    
+    // Just await the promise without additional timeout
     await this.startPromise;
+    logger.info('[Copilot] Client started successfully');
 
     this.sessionCount++;
+    logger.debug(`[Copilot] Active sessions: ${this.sessionCount}`);
     return this.client;
   }
 
@@ -67,10 +122,13 @@ class CopilotClientManager {
 
   async forceStop(): Promise<void> {
     if (this.client) {
+      logger.info('[Copilot] Stopping client...');
       try {
         await this.client.stop();
-      } catch {
-        // Ignore errors during shutdown
+        logger.debug('[Copilot] Client stopped successfully');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn('[Copilot] Error during client shutdown', { error: message });
       }
       this.client = null;
       this.startPromise = null;
@@ -107,9 +165,17 @@ export class ChatCopilot extends SimpleChatModel<ChatCopilotOptions> {
 
   constructor(options: ChatCopilotOptions = {}) {
     super(options);
-    this.modelName = options.model || 'gpt-4.1';
+    // Normalize model name: strip copilot: prefix and convert underscores to dots
+    const rawModel = options.model || 'gpt-4.1';
+    this.modelName = rawModel.replace(/^copilot:/, '').replace(/_/g, '.');
     this.streamingEnabled = options.streaming || false;
     this.timeout = options.timeout || 120000; // 2 minutes default
+    logger.info('[Copilot] ChatCopilot initialized', {
+      rawModel,
+      normalizedModel: this.modelName,
+      streaming: this.streamingEnabled,
+      timeout: this.timeout
+    });
   }
 
   _llmType(): string {
@@ -159,10 +225,29 @@ export class ChatCopilot extends SimpleChatModel<ChatCopilotOptions> {
     const client = await CopilotClientManager.getInstance().getClient();
 
     if (!this.currentSession) {
-      this.currentSession = await client.createSession({
+      logger.info('[Copilot] Creating new session', {
         model: this.modelName,
-        streaming: this.streamingEnabled,
+        streaming: this.streamingEnabled
       });
+      
+      try {
+        logger.debug('[Copilot] Calling client.createSession() with model:', this.modelName);
+        this.currentSession = await client.createSession({
+          model: this.modelName,
+          streaming: this.streamingEnabled,
+        });
+        logger.debug('[Copilot] Session created successfully');
+        logger.debug('[Copilot] Session details:', {
+          sessionId: (this.currentSession as any).id || 'unknown',
+          model: this.modelName
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error('[Copilot] Failed to create session', { error: message });
+        throw error;
+      }
+    } else {
+      logger.debug('[Copilot] Reusing existing session');
     }
 
     return this.currentSession;
@@ -179,30 +264,84 @@ export class ChatCopilot extends SimpleChatModel<ChatCopilotOptions> {
   ): Promise<string> {
     const session = await this.getSession();
     const prompt = this.messagesToPrompt(messages);
+    
+    logger.debug('[Copilot] Sending prompt', {
+      promptLength: prompt.length,
+      messageCount: messages.length,
+      streaming: this.streamingEnabled,
+      timeout: this.timeout
+    });
+    
+    // Log first 500 chars of prompt for debugging
+    logger.debug('[Copilot] Prompt preview:', prompt.substring(0, 500) + (prompt.length > 500 ? '...' : ''));
 
-    if (this.streamingEnabled && runManager) {
-      // Handle streaming - collect deltas and emit tokens
-      let fullContent = '';
-      
-      const unsubscribe = session.on('assistant.message_delta', (event) => {
-        const delta = event.data.deltaContent;
-        if (delta) {
-          fullContent += delta;
-          runManager.handleLLMNewToken(delta);
+    try {
+      if (this.streamingEnabled && runManager) {
+        // Handle streaming - collect deltas and emit tokens
+        logger.info('[Copilot] Using streaming mode');
+        let fullContent = '';
+        let tokenCount = 0;
+        
+        const unsubscribe = session.on('assistant.message_delta', (event) => {
+          const delta = event.data.deltaContent;
+          if (delta) {
+            fullContent += delta;
+            tokenCount++;
+            runManager.handleLLMNewToken(delta);
+          }
+        });
+
+        try {
+          logger.debug('[Copilot] Calling session.sendAndWait() in streaming mode...');
+          
+          // Add timeout wrapper for streaming sendAndWait
+          const sendPromise = session.sendAndWait({ prompt }, this.timeout);
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            setTimeout(() => {
+              logger.error('[Copilot] session.sendAndWait() timed out in streaming mode');
+              reject(new Error(`session.sendAndWait() timed out after ${this.timeout}ms in streaming mode.`));
+            }, this.timeout);
+          });
+          
+          await Promise.race([sendPromise, timeoutPromise]);
+          logger.debug('[Copilot] Streaming complete', {
+            responseLength: fullContent.length,
+            tokens: tokenCount
+          });
+        } finally {
+          unsubscribe();
         }
-      });
 
-      try {
-        await session.sendAndWait({ prompt }, this.timeout);
-      } finally {
-        unsubscribe();
+        return fullContent;
+      } else {
+        // Non-streaming - wait for full response
+        logger.info('[Copilot] Using non-streaming mode');
+        logger.debug('[Copilot] Calling session.sendAndWait()...');
+        
+        // Add timeout wrapper for sendAndWait
+        const sendPromise = session.sendAndWait({ prompt }, this.timeout);
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            logger.error('[Copilot] session.sendAndWait() timed out');
+            reject(new Error(`session.sendAndWait() timed out after ${this.timeout}ms. The model may be taking too long to respond, or there may be a network issue.`));
+          }, this.timeout);
+        });
+        
+        const response = await Promise.race([sendPromise, timeoutPromise]);
+        logger.debug('[Copilot] sendAndWait() completed');
+        
+        const content = response?.data.content || '';
+        
+        logger.debug('[Copilot] Response received', {
+          responseLength: content.length
+        });
+        
+        return content;
       }
-
-      return fullContent;
-    } else {
-      // Non-streaming - wait for full response
-      const response = await session.sendAndWait({ prompt }, this.timeout);
-      return response?.data.content || '';
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('[Copilot] Call failed', { error: message });
+      throw error;
     }
   }
 
@@ -234,10 +373,13 @@ export class ChatCopilot extends SimpleChatModel<ChatCopilotOptions> {
    */
   async close(): Promise<void> {
     if (this.currentSession) {
+      logger.info('[Copilot] Destroying session...');
       try {
         await this.currentSession.destroy();
-      } catch {
-        // Ignore errors during cleanup
+        logger.debug('[Copilot] Session destroyed successfully');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn('[Copilot] Error during session cleanup', { error: message });
       }
       this.currentSession = null;
     }
@@ -250,13 +392,24 @@ export class ChatCopilot extends SimpleChatModel<ChatCopilotOptions> {
  * Returns true if Copilot can be used, false otherwise.
  */
 export async function checkCopilotAvailable(): Promise<boolean> {
+  logger.info('[Copilot] Checking authentication status...');
+  
   try {
     const client = new CopilotClient();
     await client.start();
     const status = await client.getAuthStatus();
     await client.stop();
-    return status.isAuthenticated === true;
-  } catch {
+    
+    const isAuthenticated = status.isAuthenticated === true;
+    logger.info('[Copilot] Auth check complete', {
+      isAuthenticated,
+      status: JSON.stringify(status)
+    });
+    
+    return isAuthenticated;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error('[Copilot] Auth check failed', { error: message });
     return false;
   }
 }
@@ -265,14 +418,29 @@ export async function checkCopilotAvailable(): Promise<boolean> {
  * Get the list of available models from Copilot.
  */
 export async function getCopilotModels(): Promise<string[]> {
+  logger.info('[Copilot] Fetching available models...');
+  
   try {
     const client = new CopilotClient();
     await client.start();
     const models = await client.listModels();
     await client.stop();
-    return models.map((m: { id: string }) => m.id);
-  } catch {
+    
+    const modelIds = models.map((m: { id: string }) => m.id);
+    logger.info('[Copilot] Models fetched successfully', {
+      count: modelIds.length,
+      models: modelIds
+    });
+    
+    return modelIds;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('[Copilot] Failed to fetch models, using defaults', { error: message });
+    
     // Return default models if we can't fetch
-    return ['gpt-4.1', 'gpt-5.2', 'claude-sonnet-4-5', 'claude-opus-4-5'];
+    const defaultModels = ['gpt-4.1', 'gpt-5.2', 'claude-sonnet-4-5', 'claude-opus-4-5'];
+    logger.debug('[Copilot] Using default models', { models: defaultModels });
+    
+    return defaultModels;
   }
 }
