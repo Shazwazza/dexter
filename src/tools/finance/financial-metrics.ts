@@ -1,9 +1,15 @@
 import { DynamicStructuredTool, StructuredToolInterface } from '@langchain/core/tools';
+import type { RunnableConfig } from '@langchain/core/runnables';
 import { AIMessage, ToolCall } from '@langchain/core/messages';
 import { z } from 'zod';
 import { callLlm } from '../../model/llm.js';
 import { formatToolResult } from '../types.js';
 import { getCurrentDate } from '../../agent/prompts.js';
+
+/** Format snake_case tool name to Title Case for progress messages */
+function formatSubToolName(name: string): string {
+  return name.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
 
 // Import fundamental analysis tools directly (avoid circular deps with index.ts)
 import { getIncomeStatements, getBalanceSheets, getCashFlowStatements, getAllFinancialStatements } from './fundamentals.js';
@@ -84,21 +90,27 @@ export function createFinancialMetrics(model: string): DynamicStructuredTool {
 - Multi-period trend analysis
 - Multi-company fundamental comparisons`,
     schema: FinancialMetricsInputSchema,
-    func: async (input) => {
+    func: async (input, _runManager, config?: RunnableConfig) => {
+      const onProgress = config?.metadata?.onProgress as ((msg: string) => void) | undefined;
+
       // 1. Call LLM with metrics tools bound (native tool calling)
-      const response = await callLlm(input.query, {
+      onProgress?.('Searching...');
+      const { response } = await callLlm(input.query, {
         model,
         systemPrompt: buildRouterPrompt(),
         tools: METRICS_TOOLS,
-      }) as AIMessage;
+      });
+      const aiMessage = response as AIMessage;
 
       // 2. Check for tool calls
-      const toolCalls = response.tool_calls as ToolCall[];
+      const toolCalls = aiMessage.tool_calls as ToolCall[];
       if (!toolCalls || toolCalls.length === 0) {
         return formatToolResult({ error: 'No tools selected for query' }, []);
       }
 
       // 3. Execute tool calls in parallel
+      const toolNames = toolCalls.map(tc => formatSubToolName(tc.name));
+      onProgress?.(`Fetching from ${toolNames.join(', ')}...`);
       const results = await Promise.all(
         toolCalls.map(async (tc) => {
           try {
