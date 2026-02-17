@@ -109,6 +109,8 @@ cp env.example .env
 
 ## 🚀 How to Run
 
+### Standard Mode (Bun)
+
 Run Dexter in interactive mode:
 ```bash
 bun start
@@ -118,6 +120,33 @@ Or with watch mode for development:
 ```bash
 bun dev
 ```
+
+### GitHub Copilot Mode (Node.js Required)
+
+**Important:** If you're using GitHub Copilot models, you must run Dexter with Node.js instead of Bun due to SDK compatibility requirements.
+
+**Setup:**
+1. Install the Copilot CLI:
+```bash
+npm install -g @github/copilot-cli
+```
+
+2. Authenticate with GitHub Copilot:
+```bash
+copilot auth login
+```
+
+3. Run Dexter with Node.js:
+```bash
+npm run start:node
+```
+
+Or with watch mode for development:
+```bash
+npm run dev:node
+```
+
+**Why Node.js?** The `@github/copilot-sdk` requires Node.js's experimental `node:sqlite` module, which is not yet supported by Bun. All other LLM providers (OpenAI, Anthropic, Google, xAI, OpenRouter, Ollama) work with Bun.
 
 ## 📊 How to Evaluate
 
