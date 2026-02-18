@@ -36,8 +36,8 @@ Dexter takes complex financial questions and turns them into clear, step-by-step
 ## ✅ Prerequisites
 
 - [Bun](https://bun.com) runtime (v1.0 or higher)
-- OpenAI API key (get [here](https://platform.openai.com/api-keys))
-- Financial Datasets API key (get [here](https://financialdatasets.ai))
+- OpenAI API key (get [here](https://platform.openai.com/api-keys)) **OR** GitHub Copilot subscription
+- Financial Datasets API key (get [here](https://financialdatasets.ai)) **OR** Alpha Vantage API key (get [here](https://www.alphavantage.co/support/#api-key))
 - Exa API key (get [here](https://exa.ai)) - optional, for web search
 
 #### Installing Bun
@@ -84,8 +84,20 @@ cp env.example .env
 # XAI_API_KEY=your-xai-api-key (optional)
 # OPENROUTER_API_KEY=your-openrouter-api-key (optional)
 
+# (Optional) If using GitHub Copilot - no API key needed, uses CLI authentication
+# Install Copilot CLI: https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli
+# Then run: copilot auth login
+
+# Financial Data Provider (choose one)
+# FINANCIAL_DATA_PROVIDER=financialdatasets  # Default - higher rate limits, SEC filings support
+# FINANCIAL_DATA_PROVIDER=alphavantage       # Alternative - global coverage, forex, technical indicators
+
 # Institutional-grade market data for agents; AAPL, NVDA, MSFT are free
 # FINANCIAL_DATASETS_API_KEY=your-financial-datasets-api-key
+
+# Alpha Vantage API key (if using alphavantage provider)
+# ALPHAVANTAGE_API_KEY=your-alpha-vantage-api-key
+# Note: Free tier has 25 requests/day limit
 
 # (Optional) If using Ollama locally
 # OLLAMA_BASE_URL=http://127.0.0.1:11434
@@ -97,6 +109,8 @@ cp env.example .env
 
 ## 🚀 How to Run
 
+### Standard Mode (Bun)
+
 Run Dexter in interactive mode:
 ```bash
 bun start
@@ -106,6 +120,33 @@ Or with watch mode for development:
 ```bash
 bun dev
 ```
+
+### GitHub Copilot Mode (Node.js Required)
+
+**Important:** If you're using GitHub Copilot models, you must run Dexter with Node.js instead of Bun due to SDK compatibility requirements.
+
+**Setup:**
+1. Install the Copilot CLI:
+```bash
+npm install -g @github/copilot-cli
+```
+
+2. Authenticate with GitHub Copilot:
+```bash
+copilot auth login
+```
+
+3. Run Dexter with Node.js:
+```bash
+npm run start:node
+```
+
+Or with watch mode for development:
+```bash
+npm run dev:node
+```
+
+**Why Node.js?** The `@github/copilot-sdk` requires Node.js's experimental `node:sqlite` module, which is not yet supported by Bun. All other LLM providers (OpenAI, Anthropic, Google, xAI, OpenRouter, Ollama) work with Bun.
 
 ## 📊 How to Evaluate
 

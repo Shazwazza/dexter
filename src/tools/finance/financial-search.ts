@@ -5,49 +5,12 @@ import { z } from 'zod';
 import { callLlm } from '../../model/llm.js';
 import { formatToolResult } from '../types.js';
 import { getCurrentDate } from '../../agent/prompts.js';
+import { getFinanceTools } from './tool-factory.js';
 
 /** Format snake_case tool name to Title Case for progress messages */
 function formatSubToolName(name: string): string {
   return name.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
-
-// Import all finance tools directly (avoid circular deps with index.ts)
-import { getIncomeStatements, getBalanceSheets, getCashFlowStatements, getAllFinancialStatements } from './fundamentals.js';
-import { getPriceSnapshot, getPrices } from './prices.js';
-import { getKeyRatiosSnapshot, getKeyRatios } from './key-ratios.js';
-import { getNews } from './news.js';
-import { getAnalystEstimates } from './estimates.js';
-import { getSegmentedRevenues } from './segments.js';
-import { getCryptoPriceSnapshot, getCryptoPrices, getCryptoTickers } from './crypto.js';
-import { getInsiderTrades } from './insider_trades.js';
-import { getCompanyFacts } from './company_facts.js';
-
-// All finance tools available for routing
-const FINANCE_TOOLS: StructuredToolInterface[] = [
-  // Price Data
-  getPriceSnapshot,
-  getPrices,
-  getCryptoPriceSnapshot,
-  getCryptoPrices,
-  getCryptoTickers,
-  // Fundamentals
-  getIncomeStatements,
-  getBalanceSheets,
-  getCashFlowStatements,
-  getAllFinancialStatements,
-  // Key Ratios & Estimates
-  getKeyRatiosSnapshot,
-  getKeyRatios,
-  getAnalystEstimates,
-  // Other Data
-  getNews,
-  getInsiderTrades,
-  getSegmentedRevenues,
-  getCompanyFacts,
-];
-
-// Create a map for quick tool lookup by name
-const FINANCE_TOOL_MAP = new Map(FINANCE_TOOLS.map(t => [t.name, t]));
 
 // Build the router system prompt - simplified since LLM sees tool schemas
 function buildRouterPrompt(): string {
@@ -109,12 +72,16 @@ export function createFinancialSearch(model: string): DynamicStructuredTool {
     func: async (input, _runManager, config?: RunnableConfig) => {
       const onProgress = config?.metadata?.onProgress as ((msg: string) => void) | undefined;
 
+      // Get finance tools for the current provider (dynamically)
+      const financeTools = getFinanceTools();
+      const toolMap = new Map(financeTools.map(t => [t.name, t]));
+
       // 1. Call LLM with finance tools bound (native tool calling)
       onProgress?.('Searching...');
       const { response } = await callLlm(input.query, {
         model,
         systemPrompt: buildRouterPrompt(),
-        tools: FINANCE_TOOLS,
+        tools: financeTools,
       });
       const aiMessage = response as AIMessage;
 
@@ -130,7 +97,7 @@ export function createFinancialSearch(model: string): DynamicStructuredTool {
       const results = await Promise.all(
         toolCalls.map(async (tc) => {
           try {
-            const tool = FINANCE_TOOL_MAP.get(tc.name);
+            const tool = toolMap.get(tc.name);
             if (!tool) {
               throw new Error(`Tool '${tc.name}' not found`);
             }

@@ -11,6 +11,7 @@ import { Runnable } from '@langchain/core/runnables';
 import { z } from 'zod';
 import { DEFAULT_SYSTEM_PROMPT } from '@/agent/prompts';
 import type { TokenUsage } from '@/agent/types';
+import { ChatCopilot, setCopilotToolCallbacks, clearCopilotToolCallbacks } from './copilot.js';
 import { logger } from '@/utils';
 import { resolveProvider, getProviderById } from '@/providers';
 
@@ -114,6 +115,14 @@ const MODEL_FACTORIES: Record<string, ModelFactory> = {
       ...opts,
       ...(process.env.OLLAMA_BASE_URL ? { baseUrl: process.env.OLLAMA_BASE_URL } : {}),
     }),
+  copilot: (name, opts) => {
+    // Strip 'copilot:' prefix and normalize underscores to dots for model names
+    const modelName = name.replace(/^copilot:/, '').replace(/_/g, '.');
+    return new ChatCopilot({
+      model: modelName,
+      streaming: opts.streaming,
+    });
+  },
 };
 
 const DEFAULT_FACTORY: ModelFactory = (name, opts) =>
@@ -235,3 +244,5 @@ export async function callLlm(prompt: string, options: CallLlmOptions = {}): Pro
   }
   return { response: result as AIMessage, usage };
 }
+
+export { setCopilotToolCallbacks, clearCopilotToolCallbacks };

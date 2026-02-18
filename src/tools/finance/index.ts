@@ -12,3 +12,10 @@ export { createFinancialSearch } from './financial-search.js';
 export { createFinancialMetrics } from './financial-metrics.js';
 export { createReadFilings } from './read-filings.js';
 
+// Provider abstraction
+export { getFinanceProvider, isProviderConfigured, type FinanceProvider } from './provider.js';
+export { getFinanceTools, getFinanceTool, getCurrentProvider } from './tool-factory.js';
+
+// Alpha Vantage tools (for direct access if needed)
+export * as alphavantage from './alphavantage/index.js';
+

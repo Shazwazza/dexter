@@ -71,6 +71,12 @@ export const PROVIDERS: ProviderDef[] = [
     displayName: 'Ollama',
     modelPrefix: 'ollama:',
   },
+  {
+    id: 'copilot',
+    displayName: 'GitHub Copilot',
+    modelPrefix: 'copilot:',
+    fastModel: 'copilot:gpt-4.1',
+  },
 ];
 
 const defaultProvider = PROVIDERS.find((p) => p.id === 'openai')!;
