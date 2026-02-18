@@ -11,7 +11,7 @@ import { Runnable } from '@langchain/core/runnables';
 import { z } from 'zod';
 import { DEFAULT_SYSTEM_PROMPT } from '@/agent/prompts';
 import type { TokenUsage } from '@/agent/types';
-import { ChatCopilot } from './copilot.js';
+import { ChatCopilot, setCopilotToolCallbacks, clearCopilotToolCallbacks } from './copilot.js';
 import { logger } from '@/utils';
 import { resolveProvider, getProviderById } from '@/providers';
 
@@ -244,3 +244,5 @@ export async function callLlm(prompt: string, options: CallLlmOptions = {}): Pro
   }
   return { response: result as AIMessage, usage };
 }
+
+export { setCopilotToolCallbacks, clearCopilotToolCallbacks };

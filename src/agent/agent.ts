@@ -1,6 +1,6 @@
 import { AIMessage } from '@langchain/core/messages';
 import { StructuredToolInterface } from '@langchain/core/tools';
-import { callLlm } from '../model/llm.js';
+import { callLlm, setCopilotToolCallbacks, clearCopilotToolCallbacks } from '../model/llm.js';
 import { getTools } from '../tools/registry.js';
 import { buildSystemPrompt, buildIterationPrompt, buildFinalAnswerPrompt } from '../agent/prompts.js';
 import { extractTextContent, hasToolCalls } from '../utils/ai-message.js';
@@ -73,7 +73,7 @@ export class Agent {
     while (ctx.iteration < this.maxIterations) {
       ctx.iteration++;
 
-      const { response, usage } = await this.callModel(currentPrompt);
+      const { response, usage, bufferedEvents } = await this.callModel(currentPrompt, true, ctx);
       ctx.tokenCounter.add(usage);
       const responseText = typeof response === 'string' ? response : extractTextContent(response);
 
@@ -82,6 +82,11 @@ export class Agent {
         const trimmedText = responseText.trim();
         ctx.scratchpad.addThinking(trimmedText);
         yield { type: 'thinking', message: trimmedText };
+      }
+
+      // Yield buffered Copilot tool events (tool_start, tool_end, tool_error)
+      for (const event of bufferedEvents) {
+        yield event;
       }
 
       // No tool calls = ready to generate final answer
@@ -120,15 +125,48 @@ export class Agent {
    * Call the LLM with the current prompt.
    * @param prompt - The prompt to send to the LLM
    * @param useTools - Whether to bind tools (default: true). When false, returns string directly.
+   * @param ctx - Optional run context; when provided, Copilot tool events are captured globally.
    */
-  private async callModel(prompt: string, useTools: boolean = true): Promise<{ response: AIMessage | string; usage?: TokenUsage }> {
-    const result = await callLlm(prompt, {
-      model: this.model,
-      systemPrompt: this.systemPrompt,
-      tools: useTools ? this.tools : undefined,
-      signal: this.signal,
-    });
-    return { response: result.response, usage: result.usage };
+  private async callModel(
+    prompt: string,
+    useTools: boolean = true,
+    ctx?: RunContext
+  ): Promise<{ response: AIMessage | string; usage?: TokenUsage; bufferedEvents: AgentEvent[] }> {
+    const bufferedEvents: AgentEvent[] = [];
+
+    // Register global Copilot callbacks so all ChatCopilot instances (including nested
+    // ones created by sub-tools like financial_search) report tool events.
+    if (ctx && useTools) {
+      setCopilotToolCallbacks({
+        onToolStart: (tool, args) => {
+          bufferedEvents.push({ type: 'tool_start', tool, args });
+        },
+        onToolEnd: (tool, args, result, duration) => {
+          ctx.scratchpad.addToolResult(tool, args, result);
+          ctx.scratchpad.recordToolCall(tool);
+          bufferedEvents.push({ type: 'tool_end', tool, args, result, duration });
+        },
+        onToolError: (tool, args, error) => {
+          ctx.scratchpad.addToolResult(tool, args, `Error: ${error}`);
+          ctx.scratchpad.recordToolCall(tool);
+          bufferedEvents.push({ type: 'tool_error', tool, error });
+        },
+      });
+    }
+
+    try {
+      const result = await callLlm(prompt, {
+        model: this.model,
+        systemPrompt: this.systemPrompt,
+        tools: useTools ? this.tools : undefined,
+        signal: this.signal,
+      });
+      return { response: result.response, usage: result.usage, bufferedEvents };
+    } finally {
+      if (ctx && useTools) {
+        clearCopilotToolCallbacks();
+      }
+    }
   }
 
   /**

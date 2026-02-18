@@ -7,11 +7,13 @@
  * Authentication is handled via the Copilot CLI - users must run `copilot auth login`
  * before using this provider. No API keys are required.
  */
-import { CopilotClient, CopilotSession } from '@github/copilot-sdk';
+import { CopilotClient, CopilotSession, type Tool as CopilotTool, defineTool } from '@github/copilot-sdk';
 import { SimpleChatModel, type BaseChatModelParams } from '@langchain/core/language_models/chat_models';
 import { AIMessage, BaseMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
 import type { ChatResult } from '@langchain/core/outputs';
+import type { StructuredToolInterface } from '@langchain/core/tools';
+import { toJsonSchema } from '@langchain/core/utils/json_schema';
 import { logger } from '../utils/logger.js';
 
 // Capture console errors from the Copilot SDK
@@ -41,6 +43,33 @@ export interface ChatCopilotOptions extends BaseChatModelParams {
   streaming?: boolean;
   /** Timeout for sendAndWait in milliseconds (default: 120000 = 2 minutes) */
   timeout?: number;
+}
+
+/**
+ * Callbacks for observing tool execution within the Copilot SDK.
+ * Since Copilot handles tool calls internally, these callbacks allow the agent
+ * to observe tool start/end events and write results to the scratchpad.
+ */
+export interface CopilotToolCallbacks {
+  onToolStart?: (tool: string, args: Record<string, unknown>) => void;
+  onToolEnd?: (tool: string, args: Record<string, unknown>, result: string, duration: number) => void;
+  onToolError?: (tool: string, args: Record<string, unknown>, error: string) => void;
+}
+
+/**
+ * Module-level registry for active tool callbacks.
+ * All ChatCopilot instances (including nested ones created by sub-tools like
+ * financial_search) read from this registry, so the agent's callbacks are
+ * observed regardless of call depth.
+ */
+let activeToolCallbacks: CopilotToolCallbacks = {};
+
+export function setCopilotToolCallbacks(callbacks: CopilotToolCallbacks): void {
+  activeToolCallbacks = callbacks;
+}
+
+export function clearCopilotToolCallbacks(): void {
+  activeToolCallbacks = {};
 }
 
 /**
@@ -83,20 +112,11 @@ class CopilotClientManager {
       this.startPromise = (async () => {
         try {
           logger.debug('[Copilot] Executing client.start()...');
-          
-          // Add timeout to the actual start call
-          const startCall = this.client!.start();
-          const timeoutMs = 30000; // 30 seconds
-          const timeoutPromise = new Promise<never>((_, reject) => {
-            setTimeout(() => {
-              logger.error('[Copilot] client.start() timed out');
-              reject(new Error(`CopilotClient.start() timed out after ${timeoutMs / 1000}s`));
-            }, timeoutMs);
-          });
-          
-          await Promise.race([startCall, timeoutPromise]);
+          await this.client!.start();
           logger.debug('[Copilot] client.start() returned successfully');
         } catch (error) {
+          // Reset so the next call can retry
+          this.startPromise = null;
           const message = error instanceof Error ? error.message : String(error);
           const stack = error instanceof Error ? error.stack : undefined;
           logger.error('[Copilot] client.start() threw error', { error: message, stack });
@@ -162,6 +182,7 @@ export class ChatCopilot extends SimpleChatModel<ChatCopilotOptions> {
   private streamingEnabled: boolean;
   private timeout: number;
   private currentSession: CopilotSession | null = null;
+  private boundTools: StructuredToolInterface[] = [];
 
   constructor(options: ChatCopilotOptions = {}) {
     super(options);
@@ -175,6 +196,59 @@ export class ChatCopilot extends SimpleChatModel<ChatCopilotOptions> {
       normalizedModel: this.modelName,
       streaming: this.streamingEnabled,
       timeout: this.timeout
+    });
+  }
+
+  /**
+   * Bind LangChain tools to this model so they are passed to the Copilot session.
+   * Returns a new ChatCopilot instance with tools registered; the Copilot CLI will
+   * orchestrate tool calls internally and return the final answer via sendAndWait().
+   */
+  override bindTools(tools: StructuredToolInterface[]): this {
+    const bound = new ChatCopilot({
+      model: this.modelName,
+      streaming: this.streamingEnabled,
+      timeout: this.timeout,
+    }) as this;
+    bound.boundTools = tools;
+    logger.debug('[Copilot] bindTools called', { toolCount: tools.length, tools: tools.map(t => t.name) });
+    return bound;
+  }
+
+  /**
+   * Convert a LangChain StructuredTool to the Copilot SDK Tool format.
+   * The handler invokes the LangChain tool and returns its string result.
+   * 
+   * Tool names are prefixed with "dexter_" to avoid collisions with Copilot's
+   * built-in tools (e.g. "browser", "web_search").
+   */
+  private langchainToolToCopilot(tool: StructuredToolInterface): CopilotTool {
+    // toJsonSchema handles both Zod v3 and v4 schemas
+    const parameters = toJsonSchema(tool.schema) as Record<string, unknown>;
+    // Prefix names to avoid collisions with Copilot CLI built-in tools
+    const sdkName = `dexter_${tool.name}`;
+    return defineTool(sdkName, {
+      description: tool.description,
+      parameters,
+      handler: async (args: unknown) => {
+        const toolArgs = args as Record<string, unknown>;
+        logger.debug('[Copilot] Tool handler invoked', { tool: tool.name, args: toolArgs });
+        activeToolCallbacks.onToolStart?.(tool.name, toolArgs);
+        const startTime = Date.now();
+        try {
+          const result = await tool.invoke(toolArgs);
+          const text = typeof result === 'string' ? result : JSON.stringify(result);
+          const duration = Date.now() - startTime;
+          logger.debug('[Copilot] Tool handler completed', { tool: tool.name, resultLength: text.length });
+          activeToolCallbacks.onToolEnd?.(tool.name, toolArgs, text, duration);
+          return text;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          logger.error('[Copilot] Tool handler error', { tool: tool.name, error: message });
+          activeToolCallbacks.onToolError?.(tool.name, toolArgs, message);
+          return { textResultForLlm: `Error: ${message}`, resultType: 'failure' as const };
+        }
+      },
     });
   }
 
@@ -227,14 +301,17 @@ export class ChatCopilot extends SimpleChatModel<ChatCopilotOptions> {
     if (!this.currentSession) {
       logger.info('[Copilot] Creating new session', {
         model: this.modelName,
-        streaming: this.streamingEnabled
+        streaming: this.streamingEnabled,
+        toolCount: this.boundTools.length,
       });
       
       try {
         logger.debug('[Copilot] Calling client.createSession() with model:', this.modelName);
+        const copilotTools = this.boundTools.map(t => this.langchainToolToCopilot(t));
         this.currentSession = await client.createSession({
           model: this.modelName,
           streaming: this.streamingEnabled,
+          ...(copilotTools.length > 0 ? { tools: copilotTools } : {}),
         });
         logger.debug('[Copilot] Session created successfully');
         logger.debug('[Copilot] Session details:', {
@@ -294,16 +371,23 @@ export class ChatCopilot extends SimpleChatModel<ChatCopilotOptions> {
         try {
           logger.debug('[Copilot] Calling session.sendAndWait() in streaming mode...');
           
-          // Add timeout wrapper for streaming sendAndWait
+          // Add timeout wrapper for streaming sendAndWait with proper cleanup
+          let timeoutId: NodeJS.Timeout | null = null;
           const sendPromise = session.sendAndWait({ prompt }, this.timeout);
           const timeoutPromise = new Promise<never>((_, reject) => {
-            setTimeout(() => {
+            timeoutId = setTimeout(() => {
               logger.error('[Copilot] session.sendAndWait() timed out in streaming mode');
               reject(new Error(`session.sendAndWait() timed out after ${this.timeout}ms in streaming mode.`));
             }, this.timeout);
           });
           
-          await Promise.race([sendPromise, timeoutPromise]);
+          try {
+            await Promise.race([sendPromise, timeoutPromise]);
+          } finally {
+            // Cancel timeout if it hasn't fired yet
+            if (timeoutId) clearTimeout(timeoutId);
+          }
+          
           logger.debug('[Copilot] Streaming complete', {
             responseLength: fullContent.length,
             tokens: tokenCount
@@ -318,16 +402,24 @@ export class ChatCopilot extends SimpleChatModel<ChatCopilotOptions> {
         logger.info('[Copilot] Using non-streaming mode');
         logger.debug('[Copilot] Calling session.sendAndWait()...');
         
-        // Add timeout wrapper for sendAndWait
+        // Add timeout wrapper for sendAndWait with proper cleanup
+        let timeoutId: NodeJS.Timeout | null = null;
         const sendPromise = session.sendAndWait({ prompt }, this.timeout);
         const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => {
+          timeoutId = setTimeout(() => {
             logger.error('[Copilot] session.sendAndWait() timed out');
             reject(new Error(`session.sendAndWait() timed out after ${this.timeout}ms. The model may be taking too long to respond, or there may be a network issue.`));
           }, this.timeout);
         });
         
-        const response = await Promise.race([sendPromise, timeoutPromise]);
+        let response;
+        try {
+          response = await Promise.race([sendPromise, timeoutPromise]);
+        } finally {
+          // Cancel timeout if it hasn't fired yet
+          if (timeoutId) clearTimeout(timeoutId);
+        }
+        
         logger.debug('[Copilot] sendAndWait() completed');
         
         const content = response?.data.content || '';

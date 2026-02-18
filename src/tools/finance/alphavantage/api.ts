@@ -5,6 +5,24 @@
 
 const BASE_URL = 'https://www.alphavantage.co/query';
 
+/**
+ * Simple sequential rate limiter for Alpha Vantage's free tier (1 request/second).
+ * Queues requests so they are spaced at least 1.1s apart.
+ */
+let lastRequestTime = 0;
+let pendingRequest: Promise<void> = Promise.resolve();
+
+function throttle(): Promise<void> {
+  pendingRequest = pendingRequest.then(() => {
+    const now = Date.now();
+    const wait = Math.max(0, lastRequestTime + 1100 - now);
+    return new Promise(resolve => setTimeout(resolve, wait));
+  }).then(() => {
+    lastRequestTime = Date.now();
+  });
+  return pendingRequest;
+}
+
 export interface AlphaVantageResponse {
   data: Record<string, unknown>;
   url: string;
@@ -12,6 +30,8 @@ export interface AlphaVantageResponse {
 
 /**
  * Make a request to the Alpha Vantage API.
+ * Requests are automatically throttled to 1 per 1.1 seconds to respect the
+ * free-tier rate limit without hitting errors.
  * 
  * @param params - Query parameters including the 'function' parameter
  * @returns The API response data and URL
@@ -37,6 +57,9 @@ export async function callAlphaVantage(
       url.searchParams.append(key, String(value));
     }
   }
+
+  // Throttle to 1 request per 1.1s (free tier: 1 req/sec)
+  await throttle();
 
   const response = await fetch(url.toString());
   

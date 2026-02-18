@@ -5,8 +5,10 @@
  * Note: Tests that require actual SDK communication are skipped since
  * they require the Copilot CLI to be installed and authenticated.
  */
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect } from '@jest/globals';
 import { ChatCopilot } from '../copilot';
+import { DynamicStructuredTool } from '@langchain/core/tools';
+import { z } from 'zod';
 
 describe('ChatCopilot', () => {
   describe('constructor', () => {
@@ -114,5 +116,32 @@ describe('ChatCopilot configuration', () => {
   it('should support custom models', () => {
     const copilot = new ChatCopilot({ model: 'custom-model-name' });
     expect(copilot.invocationParams().model).toBe('custom-model-name');
+  });
+});
+
+describe('ChatCopilot bindTools', () => {
+  it('should return a new ChatCopilot instance', () => {
+    const copilot = new ChatCopilot({ model: 'gpt-4.1' });
+    const mockTool = new DynamicStructuredTool({
+      name: 'test_tool',
+      description: 'A test tool',
+      schema: z.object({ query: z.string() }),
+      func: async ({ query }) => `result for ${query}`,
+    });
+    const bound = copilot.bindTools([mockTool]);
+    expect(bound).toBeInstanceOf(ChatCopilot);
+  });
+
+  it('should preserve model settings on bound instance', () => {
+    const copilot = new ChatCopilot({ model: 'gpt-5.2', streaming: true });
+    const bound = copilot.bindTools([]);
+    expect(bound.invocationParams().model).toBe('gpt-5.2');
+    expect(bound.invocationParams().streaming).toBe(true);
+  });
+
+  it('should return different instance from original', () => {
+    const copilot = new ChatCopilot({ model: 'gpt-4.1' });
+    const bound = copilot.bindTools([]);
+    expect(bound).not.toBe(copilot);
   });
 });
